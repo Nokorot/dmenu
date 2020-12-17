@@ -238,7 +238,7 @@ match(void)
 	struct item *item, *lprefix, *lsubstr, *prefixend, *substrend;
 
 	if (json)
-		fstrstr = strcasestr;
+		fstrstr = strcasecmp;
 	strcpy(buf, text);
 	/* separate input text into tokens to be matched individually */
 	for (s = strtok(buf, " "); s; tokv[tokc - 1] = s, s = strtok(NULL, " "))
