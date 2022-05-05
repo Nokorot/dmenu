@@ -65,6 +65,8 @@ static char *(*fstrstr)(const char *, const char *) = strstr;
 static void listjson(json_t *obj);
 static json_t *json = NULL;
 
+static FILE *preview_fd = NULL;
+
 static struct item *
 itemnew(void)
 {
@@ -226,6 +228,19 @@ grabkeyboard(void)
 	die("cannot grab keyboard");
 }
 
+static struct item *
+setsel(struct item *item)
+{
+    sel = item;
+    if(preview_fd && item) {
+        // TODO: json
+        fprintf(preview_fd, "%s\n", item->text);
+        fflush(preview_fd);
+    }
+
+    return item;
+}
+
 static void
 match(void)
 {
@@ -278,7 +293,8 @@ match(void)
 			matches = lsubstr;
 		matchend = substrend;
 	}
-	curr = sel = matches;
+	// curr = sel = matches;
+    setsel(curr = matches);
 	calcoffsets();
 }
 
@@ -441,7 +457,7 @@ insert:
 			while (next && (curr = curr->right))
 				calcoffsets();
 		}
-		sel = matchend;
+		setsel(matchend);
 		break;
 	case XK_Escape:
 		cleanup();
@@ -451,7 +467,7 @@ insert:
 			cursor = 0;
 			break;
 		}
-		sel = curr = matches;
+		setsel(curr = matches);
 		calcoffsets();
 		break;
 	case XK_Left:
@@ -463,7 +479,7 @@ insert:
 			return;
 		/* fallthrough */
 	case XK_Up:
-		if (sel && sel->left && (sel = sel->left)->right == curr) {
+		if (sel && sel->left && (setsel(sel->left))->right == curr) {
 			curr = prev;
 			calcoffsets();
 		}
@@ -471,13 +487,13 @@ insert:
 	case XK_Next:
 		if (!next)
 			return;
-		sel = curr = next;
+		setsel(curr = next);
 		calcoffsets();
 		break;
 	case XK_Prior:
 		if (!prev)
 			return;
-		sel = curr = prev;
+		setsel(curr = prev);
 		calcoffsets();
 		break;
 	case XK_Return:
@@ -511,7 +527,7 @@ insert:
 			return;
 		/* fallthrough */
 	case XK_Down:
-		if (sel && sel->right && (sel = sel->right) == next) {
+		if (sel && sel->right && (setsel(sel->right)) == next) {
 			curr = next;
 			calcoffsets();
 		}
@@ -584,6 +600,16 @@ listjson(json_t *obj)
 		items[items_ln].text = NULL;
 	inputw = items ? TEXTW(items[imax].text) : 0;
 	lines = MIN(lines, items_ln - 1);
+}
+
+static void
+openpreview(const char *filename)
+{
+    preview_fd = fopen(filename, "w");
+    if (preview_fd == NULL) {
+        fprintf(stderr, "ERROR: Failed to open preview file\n");
+        exit(1);
+    }
 }
 
 static void
@@ -787,6 +813,8 @@ main(int argc, char *argv[])
 		/* these options take one argument */
 		else if (!strcmp(argv[i], "-j"))
 			readjson(argv[++i]);
+		else if (!strcmp(argv[i], "-pv"))   /* preview the current selection */
+			openpreview(argv[++i]);
 		else if (!strcmp(argv[i], "-l"))   /* number of lines in vertical list */
 			lines = atoi(argv[++i]);
 		else if (!strcmp(argv[i], "-m"))
