@@ -4,6 +4,10 @@ dmenu \- dynamic menu
 .SH SYNOPSIS
 .B dmenu
 .RB [ \-bfiv ]
+.RB [ \-j
+.IR json-file ]
+.RB [ \-jd
+.IR json-depth ]
 .RB [ \-l
 .IR lines ]
 .RB [ \-m
@@ -49,6 +53,18 @@ dmenu matches menu items case insensitively.
 .TP
 .BI \-l " lines"
 dmenu lists items vertically, with the given number of lines.
+.TP
+.BI \-j " json-file"
+dmenu reads the entryes from a json file instead of from stdin. 
+The top most-keys will become the list items. When a key is selected, the  
+corrsesponding value is written to stdout, unless the value is an object. 
+In this case, the keys of this object will be listed and the user may again select 
+an item. 
+This recursive selection continues until the value is not an object or until a maximum depth 
+spesifyed by 'json-depth (see. \-jd)
+.TP
+.BI \-jd " json-depth"
+defines the 'json-depth (see. -j). default is -1, meaning the depth is infinite.
 .TP
 .BI \-m " monitor"
 dmenu is displayed on the monitor number supplied. Monitor numbers are starting

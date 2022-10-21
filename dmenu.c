@@ -64,6 +64,7 @@ static char *(*fstrstr)(const char *, const char *) = strstr;
 
 static void listjson(json_t *obj);
 static json_t *json = NULL;
+static int jsondepth = -1;
 
 static FILE *preview_fd = NULL;
 
@@ -252,8 +253,10 @@ match(void)
 	size_t len, textsize;
 	struct item *item, *lprefix, *lsubstr, *prefixend, *substrend;
 
-	if (json)
-		fstrstr = strcasecmp;
+    // Note: I don't understand this:
+	// if (json)
+	// 	fstrstr = strcasecmp;
+    //
 	strcpy(buf, text);
 	/* separate input text into tokens to be matched individually */
 	for (s = strtok(buf, " "); s; tokv[tokc - 1] = s, s = strtok(NULL, " "))
@@ -500,11 +503,14 @@ insert:
 	case XK_KP_Enter:
 		if (sel && sel->json) {
 			if (json_is_object(sel->json)) {
-				listjson(sel->json);
-				text[0] = '\0';
-				match();
-				drawmenu();
-				break;
+                if (jsondepth-- != 0) {
+				    listjson(sel->json);
+				    text[0] = '\0';
+				    match();
+				    drawmenu();
+				    break;
+                }
+				puts(json_dumps(sel->json, 0));
 			} else {
 				puts(json_string_value(sel->json));
 			}
@@ -784,9 +790,9 @@ setup(void)
 static void
 usage(void)
 {
-	fputs("usage: dmenu [-bfiv] [-j json-file] [-l lines] [-p prompt]\n"
-	      "             [-fn font] [-m monitor] [-nb color] [-nf color]\n"
-	      "             [-sb color] [-sf color] [-w windowid]\n", stderr);
+	fputs("usage: dmenu [-bfiv] [-j json-file] [-jd json-depth] [-l lines]\n"
+	      "             [-p prompt] [-fn font] [-m monitor] [-nb color]\n"
+	      "             [-nf color] [-sb color] [-sf color] [-w windowid]\n", stderr);
 	exit(1);
 }
 
@@ -813,6 +819,8 @@ main(int argc, char *argv[])
 		/* these options take one argument */
 		else if (!strcmp(argv[i], "-j"))
 			readjson(argv[++i]);
+		else if (!strcmp(argv[i], "-jd"))
+			jsondepth = atoi(argv[++i]);
 		else if (!strcmp(argv[i], "-pv"))   /* preview the current selection */
 			openpreview(argv[++i]);
 		else if (!strcmp(argv[i], "-l"))   /* number of lines in vertical list */
