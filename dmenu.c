@@ -605,7 +605,8 @@ listjson(json_t *obj)
 	if (items)
 		items[items_ln].text = NULL;
 	inputw = items ? TEXTW(items[imax].text) : 0;
-	lines = MIN(lines, items_ln - 1);
+
+	lines = MIN(lines, items_ln);
 }
 
 static void
@@ -791,8 +792,8 @@ static void
 usage(void)
 {
 	fputs("usage: dmenu [-bfiv] [-j json-file] [-jd json-depth] [-l lines]\n"
-	      "             [-p prompt] [-fn font] [-m monitor] [-nb color]\n"
-	      "             [-nf color] [-sb color] [-sf color] [-w windowid]\n", stderr);
+	      "             [-p prompt] [-sel selection] [-fn font] [-m monitor]\n"
+        "             [-nb color] [-nf color] [-sb color] [-sf color] [-w windowid]\n", stderr);
 	exit(1);
 }
 
