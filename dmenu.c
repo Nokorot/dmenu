@@ -23,7 +23,7 @@
 
 /* macros */
 #define INTERSECT(x,y,w,h,r)  (MAX(0, MIN((x)+(w),(r).x_org+(r).width)  - MAX((x),(r).x_org)) \
-                             * MAX(0, MIN((y)+(h),(r).y_org+(r).height) - MAX((y),(r).y_org)))
+ 														* MAX(0, MIN((y)+(h),(r).y_org+(r).height) - MAX((y),(r).y_org)))
 #define LENGTH(X)             (sizeof X / sizeof X[0])
 #define TEXTW(X)              (drw_fontset_getwidth(drw, (X)) + lrpad)
 
@@ -226,7 +226,7 @@ grabkeyboard(void)
 	/* try to grab keyboard, we may have to wait for another process to ungrab */
 	for (i = 0; i < 1000; i++) {
 		if (XGrabKeyboard(dpy, DefaultRootWindow(dpy), True, GrabModeAsync,
-		                  GrabModeAsync, CurrentTime) == GrabSuccess)
+											GrabModeAsync, CurrentTime) == GrabSuccess)
 			return;
 		nanosleep(&ts, NULL);
 	}
@@ -236,14 +236,14 @@ grabkeyboard(void)
 static struct item *
 setsel(struct item *item)
 {
-    sel = item;
-    if(preview_fd && item) {
-        // TODO: json
-        fprintf(preview_fd, "%s\n", item->text);
-        fflush(preview_fd);
-    }
+  	sel = item;
+  	if(preview_fd && item) {
+  			// TODO: json
+  			fprintf(preview_fd, "%s\n", item->text);
+  			fflush(preview_fd);
+  	}
 
-    return item;
+  	return item;
 }
 
 int
@@ -261,46 +261,59 @@ compare_distance(const void *a, const void *b)
 }
 
 void
-fuzzymatch(void)
+fuzzymatch(int tokc, char **tokv)
 {
 	/* bang - we have so much memory */
 	struct item *it;
 	struct item **fuzzymatches = NULL;
 	char c;
-	int number_of_matches = 0, i, pidx, sidx, eidx;
-	int text_len = strlen(text), itext_len;
+	int number_of_matches = 0, i, j, pidx, sidx, eidx;
+	int text_len = strlen(text), tok_len, itext_len;
 
 	matches = matchend = NULL;
 
 	/* walk through all items */
 	for (it = items; it && it->text; it++) {
+		it->distance = 0;
 		if (text_len) {
+  		eidx = -1;
 			itext_len = strlen(it->text);
-			pidx = 0; /* pointer */
-			sidx = eidx = -1; /* start of match, end of match */
-			/* walk through item text */
-			for (i = 0; i < itext_len && (c = it->text[i]); i++) {
-				/* fuzzy match pattern */
-				if (!fstrncmp(&text[pidx], &c, 1)) {
-					if(sidx == -1)
-						sidx = i;
-					pidx++;
-					if (pidx == text_len) {
-						eidx = i;
-						break;
+
+			for (j = 0; j < tokc; j++) {
+  			// Consider whether the tokens should be found in order
+				pidx = 0; /* pointer */
+				sidx = eidx = -1; /* start of match, end of match */
+				/* walk through item text */
+				for (i = 0; i < itext_len && (c = it->text[i]); i++) {
+					/* fuzzy match pattern */
+					if (!fstrncmp(&tokv[j][pidx], &c, 1)) {
+						if(sidx == -1)
+							sidx = i;
+						pidx++;
+						if (!tokv[j][pidx]) { // Note: Using null-terminated token
+							eidx = i;
+							break;
+						}
 					}
 				}
-			}
-			/* build list of matches */
-			if (eidx != -1) {
+
+				if (eidx == -1)
+  					break;
+
 				/* compute distance */
 				/* add penalty if match starts late (log(sidx+2))
 				 * add penalty for long a match without many matching characters */
-				it->distance = log(sidx + 2) + (double)(eidx - sidx - text_len);
-				/* fprintf(stderr, "distance %s %f\n", it->text, it->distance); */
-				appenditem(it, &matches, &matchend);
-				number_of_matches++;
-			}
+  			/* linearly adding the distances for each token */
+				it->distance += log(sidx + 2) + (double)(eidx - sidx - text_len);
+  		}
+			if (eidx == -1)
+  				continue;
+
+			/* build list of matches */
+			/* fprintf(stderr, "distance %s %f\n", it->text, it->distance); */
+			appenditem(it, &matches, &matchend);
+			number_of_matches++;
+
 		} else {
 			appenditem(it, &matches, &matchend);
 		}
@@ -330,10 +343,6 @@ fuzzymatch(void)
 static void
 match(void)
 {
-	if (fuzzy) {
-		fuzzymatch();
-		return;
-	}
 	static char **tokv = NULL;
 	static int tokn = 0;
 
@@ -342,16 +351,17 @@ match(void)
 	size_t len, textsize;
 	struct item *item, *lprefix, *lsubstr, *prefixend, *substrend;
 
-    // Note: I don't understand this:
-	// if (json)
-	// 	fstrstr = strcasecmp;
-    //
 	strcpy(buf, text);
 	/* separate input text into tokens to be matched individually */
 	for (s = strtok(buf, " "); s; tokv[tokc - 1] = s, s = strtok(NULL, " "))
 		if (++tokc > tokn && !(tokv = realloc(tokv, ++tokn * sizeof *tokv)))
 			die("cannot realloc %u bytes:", tokn * sizeof *tokv);
 	len = tokc ? strlen(tokv[0]) : 0;
+
+	if (fuzzy) {
+		fuzzymatch(tokc, tokv);
+		return;
+	}
 
 	matches = lprefix = lsubstr = matchend = prefixend = substrend = NULL;
 	textsize = strlen(text) + 1;
@@ -386,7 +396,7 @@ match(void)
 		matchend = substrend;
 	}
 	// curr = sel = matches;
-    setsel(curr = matches);
+  	setsel(curr = matches);
 	calcoffsets();
 }
 
@@ -483,7 +493,7 @@ keypress(XKeyEvent *ev)
 		case XK_y: /* paste selection */
 		case XK_Y:
 			XConvertSelection(dpy, (ev->state & ShiftMask) ? clip : XA_PRIMARY,
-			                  utf8, utf8, win, CurrentTime);
+												utf8, utf8, win, CurrentTime);
 			return;
 		case XK_Left:
 			movewordedge(-1);
@@ -514,8 +524,8 @@ keypress(XKeyEvent *ev)
 		case XK_l: ksym = XK_Next;  break;
 		case XK_h: ksym = XK_Prior; break;
 		case XK_j: ksym = XK_Down;  break;
-    
-    // Default:
+
+  	// Default:
 		// case XK_h: ksym = XK_Up;    break;
 		// case XK_j: ksym = XK_Next;  break;
 		// case XK_k: ksym = XK_Prior; break;
@@ -598,13 +608,13 @@ insert:
 	case XK_KP_Enter:
 		if (sel && sel->json) {
 			if (json_is_object(sel->json)) {
-                if (jsondepth-- != 0) {
-				    listjson(sel->json);
-				    text[0] = '\0';
-				    match();
-				    drawmenu();
-				    break;
-                }
+  							if (jsondepth-- != 0) {
+						listjson(sel->json);
+						text[0] = '\0';
+						match();
+						drawmenu();
+						break;
+  							}
 				puts(json_dumps(sel->json, 0));
 			} else {
 				puts(json_string_value(sel->json));
@@ -657,8 +667,8 @@ paste(void)
 
 	/* we have been given the current selection, now insert it into input */
 	if (XGetWindowProperty(dpy, win, utf8, 0, (sizeof text / 4) + 1, False,
-	                   utf8, &da, &di, &dl, &dl, (unsigned char **)&p)
-	    == Success && p) {
+								 		utf8, &da, &di, &dl, &dl, (unsigned char **)&p)
+			== Success && p) {
 		insert(p, (q = strchr(p, '\n')) ? q - p : (ssize_t)strlen(p));
 		XFree(p);
 	}
@@ -707,11 +717,11 @@ listjson(json_t *obj)
 static void
 openpreview(const char *filename)
 {
-    preview_fd = fopen(filename, "w");
-    if (preview_fd == NULL) {
-        fprintf(stderr, "ERROR: Failed to open preview file\n");
-        exit(1);
-    }
+  	preview_fd = fopen(filename, "w");
+  	if (preview_fd == NULL) {
+  			fprintf(stderr, "ERROR: Failed to open preview file\n");
+  			exit(1);
+  	}
 }
 
 static void
@@ -836,7 +846,7 @@ setup(void)
 
 		x = info[i].x_org + (!x_offset && x_centerd ? info[i].width /  2 : 0);
 		y = info[i].y_org + (topbar ? 0 : info[i].height - mh)
-                      + (!y_offset && y_centerd ? info[i].height / 2 : 0);
+  										+ (!y_offset && y_centerd ? info[i].height / 2 : 0);
 		mw = info[i].width;
 		XFree(info);
 	} else
@@ -844,10 +854,10 @@ setup(void)
 	{
 		if (!XGetWindowAttributes(dpy, parentwin, &wa))
 			die("could not get embedding window attributes: 0x%lx",
-			    parentwin);
+					parentwin);
 		x = (!x_offset && x_centerd ? wa.width /  2 : 0);
 		y = (topbar ? 0 : wa.height - mh)
-        + (!y_offset && y_centerd ? wa.height /  2 : 0);
+  			+ (!y_offset && y_centerd ? wa.height /  2 : 0);
 		mw = wa.width;
 	}
 	promptw = (prompt && *prompt) ? TEXTW(prompt) - lrpad / 4 : 0;
@@ -858,9 +868,9 @@ setup(void)
 	swa.override_redirect = True;
 	swa.background_pixel = scheme[SchemeNorm][ColBg].pixel;
 	swa.event_mask = ExposureMask | KeyPressMask | VisibilityChangeMask;
-	
-	if (width) 
-      mw = MIN(mw, width);
+
+	if (width)
+  		mw = MIN(mw, width);
 	x = x + x_offset - (x_centerd ? mw / 2 : 0);
 	y = y + y_offset - (y_centerd ? mh / 2 : 0);
 
@@ -869,8 +879,8 @@ setup(void)
 
 
 	win = XCreateWindow(dpy, parentwin, x, y, mw, mh, 0,
-	                    CopyFromParent, CopyFromParent, CopyFromParent,
-	                    CWOverrideRedirect | CWBackPixel | CWEventMask, &swa);
+											CopyFromParent, CopyFromParent, CopyFromParent,
+											CWOverrideRedirect | CWBackPixel | CWEventMask, &swa);
 	XSetClassHint(dpy, win, &ch);
 
 
@@ -879,7 +889,7 @@ setup(void)
 		die("XOpenIM failed: could not open input device");
 
 	xic = XCreateIC(xim, XNInputStyle, XIMPreeditNothing | XIMStatusNothing,
-	                XNClientWindow, win, XNFocusWindow, win, NULL);
+									XNClientWindow, win, XNFocusWindow, win, NULL);
 
 	XMapRaised(dpy, win);
 	if (embed) {
@@ -899,8 +909,8 @@ static void
 usage(void)
 {
 	fputs("usage: dmenu [-bfiv] [-j json-file] [-jd json-depth] [-l lines]\n"
-	      "             [-p prompt] [-sel selection] [-fn font] [-m monitor]\n"
-        "             [-nb color] [-nf color] [-sb color] [-sf color] [-w windowid]\n", stderr);
+				"             [-p prompt] [-sel selection] [-fn font] [-m monitor]\n"
+  			"             [-nb color] [-nf color] [-sb color] [-sf color] [-w windowid]\n", stderr);
 	exit(1);
 }
 
@@ -983,7 +993,7 @@ main(int argc, char *argv[])
 		parentwin = root;
 	if (!XGetWindowAttributes(dpy, parentwin, &wa))
 		die("could not get embedding window attributes: 0x%lx",
-		    parentwin);
+				parentwin);
 	drw = drw_create(dpy, screen, root, wa.width, wa.height);
 	if (!drw_fontset_create(drw, fonts, LENGTH(fonts)))
 		die("no fonts could be loaded.");
