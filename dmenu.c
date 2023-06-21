@@ -1,6 +1,7 @@
 /* See LICENSE file for copyright and license details. */
 #include <ctype.h>
 #include <locale.h>
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -33,12 +34,15 @@ struct item {
 	char *text;
 	struct item *left, *right;
 	int out;
+	double distance;
 	json_t *json;
 };
 
 static char text[BUFSIZ] = "";
 static char *embed;
 static int bh, mw, mh;
+static int x_offset, y_offset, width;
+static int x_centerd = 0, y_centerd = 0;
 static int inputw = 0, promptw;
 static int lrpad; /* sum of left and right padding */
 static size_t cursor;
@@ -242,9 +246,94 @@ setsel(struct item *item)
     return item;
 }
 
+int
+compare_distance(const void *a, const void *b)
+{
+	struct item *da = *(struct item **) a;
+	struct item *db = *(struct item **) b;
+
+	if (!db)
+		return 1;
+	if (!da)
+		return -1;
+
+	return da->distance == db->distance ? 0 : da->distance < db->distance ? -1 : 1;
+}
+
+void
+fuzzymatch(void)
+{
+	/* bang - we have so much memory */
+	struct item *it;
+	struct item **fuzzymatches = NULL;
+	char c;
+	int number_of_matches = 0, i, pidx, sidx, eidx;
+	int text_len = strlen(text), itext_len;
+
+	matches = matchend = NULL;
+
+	/* walk through all items */
+	for (it = items; it && it->text; it++) {
+		if (text_len) {
+			itext_len = strlen(it->text);
+			pidx = 0; /* pointer */
+			sidx = eidx = -1; /* start of match, end of match */
+			/* walk through item text */
+			for (i = 0; i < itext_len && (c = it->text[i]); i++) {
+				/* fuzzy match pattern */
+				if (!fstrncmp(&text[pidx], &c, 1)) {
+					if(sidx == -1)
+						sidx = i;
+					pidx++;
+					if (pidx == text_len) {
+						eidx = i;
+						break;
+					}
+				}
+			}
+			/* build list of matches */
+			if (eidx != -1) {
+				/* compute distance */
+				/* add penalty if match starts late (log(sidx+2))
+				 * add penalty for long a match without many matching characters */
+				it->distance = log(sidx + 2) + (double)(eidx - sidx - text_len);
+				/* fprintf(stderr, "distance %s %f\n", it->text, it->distance); */
+				appenditem(it, &matches, &matchend);
+				number_of_matches++;
+			}
+		} else {
+			appenditem(it, &matches, &matchend);
+		}
+	}
+
+	if (number_of_matches) {
+		/* initialize array with matches */
+		if (!(fuzzymatches = realloc(fuzzymatches, number_of_matches * sizeof(struct item*))))
+			die("cannot realloc %u bytes:", number_of_matches * sizeof(struct item*));
+		for (i = 0, it = matches; it && i < number_of_matches; i++, it = it->right) {
+			fuzzymatches[i] = it;
+		}
+		/* sort matches according to distance */
+		qsort(fuzzymatches, number_of_matches, sizeof(struct item*), compare_distance);
+		/* rebuild list of matches */
+		matches = matchend = NULL;
+		for (i = 0, it = fuzzymatches[i];  i < number_of_matches && it && \
+				it->text; i++, it = fuzzymatches[i]) {
+			appenditem(it, &matches, &matchend);
+		}
+		free(fuzzymatches);
+	}
+	curr = sel = matches;
+	calcoffsets();
+}
+
 static void
 match(void)
 {
+	if (fuzzy) {
+		fuzzymatch();
+		return;
+	}
 	static char **tokv = NULL;
 	static int tokn = 0;
 
@@ -421,10 +510,16 @@ keypress(XKeyEvent *ev)
 			goto draw;
 		case XK_g: ksym = XK_Home;  break;
 		case XK_G: ksym = XK_End;   break;
-		case XK_h: ksym = XK_Up;    break;
-		case XK_j: ksym = XK_Next;  break;
-		case XK_k: ksym = XK_Prior; break;
-		case XK_l: ksym = XK_Down;  break;
+		case XK_k: ksym = XK_Up;    break;
+		case XK_l: ksym = XK_Next;  break;
+		case XK_h: ksym = XK_Prior; break;
+		case XK_j: ksym = XK_Down;  break;
+    
+    // Default:
+		// case XK_h: ksym = XK_Up;    break;
+		// case XK_j: ksym = XK_Next;  break;
+		// case XK_k: ksym = XK_Prior; break;
+		// case XK_l: ksym = XK_Down;  break;
 		default:
 			return;
 		}
@@ -739,8 +834,9 @@ setup(void)
 				if (INTERSECT(x, y, 1, 1, info[i]))
 					break;
 
-		x = info[i].x_org;
-		y = info[i].y_org + (topbar ? 0 : info[i].height - mh);
+		x = info[i].x_org + (!x_offset && x_centerd ? info[i].width /  2 : 0);
+		y = info[i].y_org + (topbar ? 0 : info[i].height - mh)
+                      + (!y_offset && y_centerd ? info[i].height / 2 : 0);
 		mw = info[i].width;
 		XFree(info);
 	} else
@@ -749,8 +845,9 @@ setup(void)
 		if (!XGetWindowAttributes(dpy, parentwin, &wa))
 			die("could not get embedding window attributes: 0x%lx",
 			    parentwin);
-		x = 0;
-		y = topbar ? 0 : wa.height - mh;
+		x = (!x_offset && x_centerd ? wa.width /  2 : 0);
+		y = (topbar ? 0 : wa.height - mh)
+        + (!y_offset && y_centerd ? wa.height /  2 : 0);
 		mw = wa.width;
 	}
 	promptw = (prompt && *prompt) ? TEXTW(prompt) - lrpad / 4 : 0;
@@ -761,6 +858,16 @@ setup(void)
 	swa.override_redirect = True;
 	swa.background_pixel = scheme[SchemeNorm][ColBg].pixel;
 	swa.event_mask = ExposureMask | KeyPressMask | VisibilityChangeMask;
+	
+	if (width) 
+      mw = MIN(mw, width);
+	x = x + x_offset - (x_centerd ? mw / 2 : 0);
+	y = y + y_offset - (y_centerd ? mh / 2 : 0);
+
+	// printf("%u\n", x);
+	// printf("%u\n", y);
+
+
 	win = XCreateWindow(dpy, parentwin, x, y, mw, mh, 0,
 	                    CopyFromParent, CopyFromParent, CopyFromParent,
 	                    CWOverrideRedirect | CWBackPixel | CWEventMask, &swa);
@@ -812,6 +919,8 @@ main(int argc, char *argv[])
 			topbar = 0;
 		else if (!strcmp(argv[i], "-f"))   /* grabs keyboard before reading stdin */
 			fast = 1;
+		else if (!strcmp(argv[i], "-F"))   /* grabs keyboard before reading stdin */
+			fuzzy = 0;
 		else if (!strcmp(argv[i], "-i")) { /* case-insensitive item matching */
 			fstrncmp = strncasecmp;
 			fstrstr = cistrstr;
@@ -831,11 +940,11 @@ main(int argc, char *argv[])
 		else if (!strcmp(argv[i], "-p"))   /* adds prompt to left of input field */
 			prompt = argv[++i];
 		else if (!strcmp(argv[i], "-sel")) { /* initial value of the selection */
-      // prompt = argv[++i];
-      strcpy(text, argv[++i]);
-      cursor = strlen(text);
-    }
-    else if (!strcmp(argv[i], "-fn"))  /* font or font set */
+			// prompt = argv[++i];
+			strcpy(text, argv[++i]);
+			cursor = strlen(text);
+		}
+		else if (!strcmp(argv[i], "-fn"))  /* font or font set */
 			fonts[0] = argv[++i];
 		else if (!strcmp(argv[i], "-nb"))  /* normal background color */
 			colors[SchemeNorm][ColBg] = argv[++i];
@@ -847,6 +956,20 @@ main(int argc, char *argv[])
 			colors[SchemeSel][ColFg] = argv[++i];
 		else if (!strcmp(argv[i], "-w"))   /* embedding window id */
 			embed = argv[++i];
+		else if (!strcmp(argv[i], "-c")) {  /* centrer the window  */
+			x_centerd = 1;
+			y_centerd = 1;
+		}
+		else if (!strcmp(argv[i], "-xc"))   /* centrer the window horizontally  */
+			x_centerd = 1;
+		else if (!strcmp(argv[i], "-yc"))   /* centrer the window vertically  */
+			y_centerd = 1;
+		else if (!strcmp(argv[i], "-x"))   /* offset window position horizontally */
+			x_offset = strtol(argv[++i], NULL, 10);
+		else if (!strcmp(argv[i], "-y"))   /* offset window position vertically */
+			y_offset = strtol(argv[++i], NULL, 10);
+		else if (!strcmp(argv[i], "-width"))   /* offset window position horizontally */
+			width = strtol(argv[++i], NULL, 10);
 		else
 			usage();
 
