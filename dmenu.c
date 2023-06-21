@@ -11,10 +11,12 @@
 
 #include <X11/Xlib.h>
 #include <X11/Xatom.h>
+#include <X11/Xproto.h>
 #include <X11/Xutil.h>
 #ifdef XINERAMA
 #include <X11/extensions/Xinerama.h>
 #endif
+#include <X11/extensions/Xrender.h>
 #include <X11/Xft/Xft.h>
 #include <jansson.h>
 
@@ -26,6 +28,8 @@
  														* MAX(0, MIN((y)+(h),(r).y_org+(r).height) - MAX((y),(r).y_org)))
 #define LENGTH(X)             (sizeof X / sizeof X[0])
 #define TEXTW(X)              (drw_fontset_getwidth(drw, (X)) + lrpad)
+
+#define OPAQUE                0xffu
 
 /* enums */
 enum { SchemeNorm, SchemeSel, SchemeOut, SchemeLast }; /* color schemes */
@@ -43,7 +47,7 @@ static char *embed;
 static int bh, mw, mh;
 static int x_offset, y_offset, width;
 static int x_centerd = 0, y_centerd = 0;
-static int inputw = 0, promptw;
+static int inputw = 0, promptw, passwd = 0;
 static int lrpad; /* sum of left and right padding */
 static size_t cursor;
 static size_t items_sz = 0;
@@ -61,10 +65,16 @@ static XIC xic;
 static Drw *drw;
 static Clr *scheme[SchemeLast];
 
+static int useargb = 0;
+static Visual *visual;
+static int depth;
+static Colormap cmap;
+
 #include "config.h"
 
 static int (*fstrncmp)(const char *, const char *, size_t) = strncmp;
 static char *(*fstrstr)(const char *, const char *) = strstr;
+static void xinitvisual();
 
 static void listjson(json_t *obj);
 static json_t *json = NULL;
@@ -155,6 +165,7 @@ drawmenu(void)
 	unsigned int curpos;
 	struct item *item;
 	int x = 0, y = 0, w;
+	char *censort;
 
 	drw_setscheme(drw, scheme[SchemeNorm]);
 	drw_rect(drw, 0, 0, mw, mh, 1, 1);
@@ -166,9 +177,18 @@ drawmenu(void)
 	/* draw input field */
 	w = (lines > 0 || !matches) ? mw - x : inputw;
 	drw_setscheme(drw, scheme[SchemeNorm]);
-	drw_text(drw, x, 0, w, bh, lrpad / 2, text, 0);
+	if (passwd) {
+	        censort = ecalloc(1, sizeof(text));
+		memset(censort, '*', strlen(text)); // Char option
+		drw_text(drw, x, 0, w, bh, lrpad / 2, censort, 0);
+		free(censort);
+	
+    curpos = (TEXTW("*") - TEXTW("")) *(cursor);
+  } else {
+    drw_text(drw, x, 0, w, bh, lrpad / 2, text, 0);
+	  curpos = TEXTW(text) - TEXTW(&text[cursor]);
+  }
 
-	curpos = TEXTW(text) - TEXTW(&text[cursor]);
 	if ((curpos += lrpad / 2 - 1) < w) {
 		drw_setscheme(drw, scheme[SchemeNorm]);
 		drw_rect(drw, x + curpos, 2, 2, bh - 4, 1, 0);
@@ -691,6 +711,11 @@ listjson(json_t *obj)
 	unsigned imax = 0;
 	unsigned tmpmax = 0;
 	struct item *item;
+	if(passwd){
+   	inputw = lines = 0;
+   	return;
+  }
+
 
 	items_ln = 0;
 	iter = json_object_iter(obj);
@@ -809,7 +834,7 @@ setup(void)
 #endif
 	/* init appearance */
 	for (j = 0; j < SchemeLast; j++)
-		scheme[j] = drw_scm_create(drw, colors[j], 2);
+		scheme[j] = drw_scm_create(drw, colors[j], alphas[i], 2);
 
 	clip = XInternAtom(dpy, "CLIPBOARD",   False);
 	utf8 = XInternAtom(dpy, "UTF8_STRING", False);
@@ -866,7 +891,10 @@ setup(void)
 
 	/* create menu window */
 	swa.override_redirect = True;
-	swa.background_pixel = scheme[SchemeNorm][ColBg].pixel;
+	// swa.background_pixel = scheme[SchemeNorm][ColBg].pixel;
+	swa.background_pixel = 0;
+	swa.border_pixel = 0;
+	swa.colormap = cmap;
 	swa.event_mask = ExposureMask | KeyPressMask | VisibilityChangeMask;
 
 	if (width)
@@ -879,8 +907,8 @@ setup(void)
 
 
 	win = XCreateWindow(dpy, parentwin, x, y, mw, mh, 0,
-											CopyFromParent, CopyFromParent, CopyFromParent,
-											CWOverrideRedirect | CWBackPixel | CWEventMask, &swa);
+	                    depth, CopyFromParent, visual,
+	                    CWOverrideRedirect | CWBackPixel | CWBorderPixel | CWColormap | CWEventMask, &swa);
 	XSetClassHint(dpy, win, &ch);
 
 
@@ -908,7 +936,7 @@ setup(void)
 static void
 usage(void)
 {
-	fputs("usage: dmenu [-bfiv] [-j json-file] [-jd json-depth] [-l lines]\n"
+	fputs("usage: dmenu [-bfivP] [-j json-file] [-jd json-depth] [-l lines]\n"
 				"             [-p prompt] [-sel selection] [-fn font] [-m monitor]\n"
   			"             [-nb color] [-nf color] [-sb color] [-sf color] [-w windowid]\n", stderr);
 	exit(1);
@@ -934,7 +962,17 @@ main(int argc, char *argv[])
 		else if (!strcmp(argv[i], "-i")) { /* case-insensitive item matching */
 			fstrncmp = strncasecmp;
 			fstrstr = cistrstr;
-		} else if (i + 1 == argc)
+		} else if (!strcmp(argv[i], "-P"))   /* is the input a password */
+			passwd = 1;
+		else if (!strcmp(argv[i], "-c")) {  /* centrer the window  */
+			x_centerd = 1;
+			y_centerd = 1;
+		}
+		else if (!strcmp(argv[i], "-xc"))   /* centrer the window horizontally  */
+			x_centerd = 1;
+		else if (!strcmp(argv[i], "-yc"))   /* centrer the window vertically  */
+			y_centerd = 1;
+		else if (i + 1 == argc)
 			usage();
 		/* these options take one argument */
 		else if (!strcmp(argv[i], "-j"))
@@ -966,14 +1004,6 @@ main(int argc, char *argv[])
 			colors[SchemeSel][ColFg] = argv[++i];
 		else if (!strcmp(argv[i], "-w"))   /* embedding window id */
 			embed = argv[++i];
-		else if (!strcmp(argv[i], "-c")) {  /* centrer the window  */
-			x_centerd = 1;
-			y_centerd = 1;
-		}
-		else if (!strcmp(argv[i], "-xc"))   /* centrer the window horizontally  */
-			x_centerd = 1;
-		else if (!strcmp(argv[i], "-yc"))   /* centrer the window vertically  */
-			y_centerd = 1;
 		else if (!strcmp(argv[i], "-x"))   /* offset window position horizontally */
 			x_offset = strtol(argv[++i], NULL, 10);
 		else if (!strcmp(argv[i], "-y"))   /* offset window position vertically */
@@ -994,7 +1024,8 @@ main(int argc, char *argv[])
 	if (!XGetWindowAttributes(dpy, parentwin, &wa))
 		die("could not get embedding window attributes: 0x%lx",
 				parentwin);
-	drw = drw_create(dpy, screen, root, wa.width, wa.height);
+	xinitvisual();
+	drw = drw_create(dpy, screen, root, wa.width, wa.height, visual, depth, cmap);
 	if (!drw_fontset_create(drw, fonts, LENGTH(fonts)))
 		die("no fonts could be loaded.");
 	lrpad = drw->fonts->h;
@@ -1021,4 +1052,41 @@ main(int argc, char *argv[])
 	run();
 
 	return 1; /* unreachable */
+}
+
+void
+xinitvisual()
+{
+	XVisualInfo *infos;
+	XRenderPictFormat *fmt;
+	int nitems;
+	int i;
+
+	XVisualInfo tpl = {
+		.screen = screen,
+		.depth = 32,
+		.class = TrueColor
+	};
+	long masks = VisualScreenMask | VisualDepthMask | VisualClassMask;
+
+	infos = XGetVisualInfo(dpy, masks, &tpl, &nitems);
+	visual = NULL;
+	for(i = 0; i < nitems; i ++) {
+		fmt = XRenderFindVisualFormat(dpy, infos[i].visual);
+		if (fmt->type == PictTypeDirect && fmt->direct.alphaMask) {
+			 visual = infos[i].visual;
+			 depth = infos[i].depth;
+			 cmap = XCreateColormap(dpy, root, visual, AllocNone);
+			 useargb = 1;
+			 break;
+		}
+	}
+
+	XFree(infos);
+
+	if (! visual) {
+		visual = DefaultVisual(dpy, screen);
+		depth = DefaultDepth(dpy, screen);
+		cmap = DefaultColormap(dpy, screen);
+	}
 }
